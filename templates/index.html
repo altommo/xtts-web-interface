@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XTTS Voice Assistant</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .section {
+            border: 1px solid #ddd;
+            padding: 15px;
+            border-radius: 5px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .hidden {
+            display: none;
+        }
+        #status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        .history-item {
+            margin-bottom: 15px;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+        }
+        .history-text {
+            margin-bottom: 10px;
+            font-style: italic;
+        }
+        #clear-history-button {
+            margin-bottom: 15px;
+            background-color: #dc3545;
+        }
+        #clear-history-button:hover {
+            background-color: #c82333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>XTTS Voice Assistant</h1>
+        
+        <div class="section" id="voice-section">
+            <h2>Step 1: Upload Voice Sample</h2>
+            <p>Upload a short audio clip (WAV format, 5-10 seconds) of the voice you want to clone:</p>
+            <input type="file" id="voice-sample" accept="audio/wav">
+            <button id="upload-button">Upload Voice</button>
+            <div id="status" class="hidden"></div>
+        </div>
+        
+        <div class="section hidden" id="tts-section">
+            <h2>Step 2: Text to Speech</h2>
+            <p>Enter text to convert to speech:</p>
+            <textarea id="text-input" placeholder="Enter text here...">Hello, I am your AI assistant. How can I help you today?</textarea>
+            <select id="language-select">
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="it">Italian</option>
+                <option value="pt">Portuguese</option>
+                <option value="pl">Polish</option>
+                <option value="tr">Turkish</option>
+                <option value="ru">Russian</option>
+                <option value="nl">Dutch</option>
+                <option value="cs">Czech</option>
+                <option value="ar">Arabic</option>
+                <option value="zh-cn">Chinese</option>
+                <option value="hu">Hungarian</option>
+                <option value="ko">Korean</option>
+                <option value="ja">Japanese</option>
+            </select>
+            <button id="generate-button">Generate Speech</button>
+        </div>
+        
+        <div class="section hidden" id="history-section">
+            <h2>Generated Speech History</h2>
+            <button id="clear-history-button">Clear History</button>
+            <div id="speech-history"></div>
+        </div>
+    </div>
+
+    <script>
+        // Store speaker data after cloning
+        let speakerData = null;
+        let speechHistory = [];
+        
+        document.getElementById('upload-button').addEventListener('click', async () => {
+            const fileInput = document.getElementById('voice-sample');
+            const statusDiv = document.getElementById('status');
+            
+            if (!fileInput.files.length) {
+                showStatus('Please select a voice sample file.', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('voice_sample', fileInput.files[0]);
+            
+            showStatus('Cloning voice... This may take a few moments.', 'info');
+            
+            try {
+                const response = await fetch('/clone_voice', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Voice cloning failed');
+                }
+                
+                speakerData = await response.json();
+                showStatus('Voice cloned successfully!', 'success');
+                
+                // Show the TTS section
+                document.getElementById('tts-section').classList.remove('hidden');
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+            }
+        });
+        
+        document.getElementById('generate-button').addEventListener('click', async () => {
+            if (!speakerData) {
+                showStatus('Please upload and clone a voice first.', 'error');
+                return;
+            }
+            
+            const text = document.getElementById('text-input').value.trim();
+            const language = document.getElementById('language-select').value;
+            
+            if (!text) {
+                showStatus('Please enter some text.', 'error');
+                return;
+            }
+            
+            // Show a temporary loading state
+            showStatus('Generating speech...', 'info');
+            
+            const payload = {
+                text: text,
+                language: language,
+                speaker_embedding: speakerData.speaker_embedding,
+                gpt_cond_latent: speakerData.gpt_cond_latent,
+                add_wav_header: true,
+                stream_chunk_size: "20"
+            };
+            
+            try {
+                // Use our modified endpoint that returns complete audio
+                const response = await fetch('/tts_stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Speech generation failed');
+                }
+                
+                const audioBlob = await response.blob();
+                const audioUrl = URL.createObjectURL(audioBlob);
+                
+                // Add to history
+                const timestamp = new Date().toLocaleTimeString();
+                const historyItem = {
+                    id: Date.now(), // Unique ID
+                    text: text,
+                    language: language,
+                    audioUrl: audioUrl,
+                    timestamp: timestamp
+                };
+                
+                speechHistory.unshift(historyItem); // Add newest at the top
+                updateSpeechHistory();
+                
+                // Show history section if hidden
+                document.getElementById('history-section').classList.remove('hidden');
+                
+                showStatus('Speech generated successfully!', 'success');
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                
+                // Fall back to regular non-streaming
+                try {
+                    showStatus('Trying alternative method...', 'info');
+                    const response = await fetch('/tts', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            text: text,
+                            language: language,
+                            speaker_embedding: speakerData.speaker_embedding,
+                            gpt_cond_latent: speakerData.gpt_cond_latent
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error('Speech generation failed');
+                    }
+                    
+                    const data = await response.json();
+                    const audioData = atob(data.audio.replace(/"/g, ''));
+                    
+                    // Convert base64 to ArrayBuffer
+                    const arrayBuffer = new ArrayBuffer(audioData.length);
+                    const view = new Uint8Array(arrayBuffer);
+                    for (let i = 0; i < audioData.length; i++) {
+                        view[i] = audioData.charCodeAt(i);
+                    }
+                    
+                    const audioBlob = new Blob([arrayBuffer], { type: 'audio/wav' });
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    
+                    // Add to history (even when using fallback)
+                    const timestamp = new Date().toLocaleTimeString();
+                    const historyItem = {
+                        id: Date.now(),
+                        text: text,
+                        language: language,
+                        audioUrl: audioUrl,
+                        timestamp: timestamp
+                    };
+                    
+                    speechHistory.unshift(historyItem);
+                    updateSpeechHistory();
+                    
+                    // Show history section if hidden
+                    document.getElementById('history-section').classList.remove('hidden');
+                    
+                    showStatus('Speech generated successfully!', 'success');
+                } catch (fallbackError) {
+                    showStatus(`Error: ${fallbackError.message}`, 'error');
+                }
+            }
+        });
+        
+        // Clear history button
+        document.getElementById('clear-history-button').addEventListener('click', () => {
+            speechHistory = [];
+            updateSpeechHistory();
+            
+            // Hide the history section if empty
+            document.getElementById('history-section').classList.add('hidden');
+            
+            showStatus('History cleared', 'info');
+        });
+        
+        // Update the history display
+        function updateSpeechHistory() {
+            const historyContainer = document.getElementById('speech-history');
+            historyContainer.innerHTML = '';
+            
+            speechHistory.forEach(item => {
+                const historyItem = document.createElement('div');
+                historyItem.className = 'history-item';
+                
+                const textElement = document.createElement('div');
+                textElement.className = 'history-text';
+                textElement.textContent = `"${item.text}" (${item.language}, ${item.timestamp})`;
+                
+                const audioElement = document.createElement('audio');
+                audioElement.controls = true;
+                audioElement.src = item.audioUrl;
+                
+                historyItem.appendChild(textElement);
+                historyItem.appendChild(audioElement);
+                historyContainer.appendChild(historyItem);
+            });
+        }
+        
+        // Helper function to show status messages
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = type;
+            statusDiv.classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>
